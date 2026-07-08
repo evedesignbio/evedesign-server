@@ -135,8 +135,8 @@ class ModelStatsSpec(BaseModel):
     """
     Model statistics representation
     """
-    y_true: list[float] | None
-    y_pred: list[float] | None
+    y_true: list[list[float]] | None
+    y_pred: list[list[float]] | None
     scores: dict[EvaluationScoreName, list[float]] | None
 
 
@@ -160,6 +160,12 @@ class ModelSpecBase(ClassSpecBase):
     stats: ModelStatsSpec | None = None
 
 
+class DatasetSplitSpec(BaseModel):
+    train: list[int]
+    test: list[int] | None = None
+    val: list[int] | None = None
+
+
 class LabeledInstanceDatasetSpec(BaseModel):
     """
     Pydantic equivalent of evedesign.dataset.LabeledInstanceDataset
@@ -168,6 +174,12 @@ class LabeledInstanceDatasetSpec(BaseModel):
 
     # mapping from label name to labels, must have same length as instances
     labels: dict[str, list[float | None]]
+
+    # optional dataset splits
+    splits: dict[str, DatasetSplitSpec] | tuple[Literal["cv"], int] | None = None
+
+    # final train/validation split
+    final_train_val_split: DatasetSplitSpec | None = None
 
     # duplication of logic in LabeledInstanceDataset class
     @model_validator(mode="after")
@@ -191,27 +203,24 @@ class LabeledInstanceDatasetSpec(BaseModel):
         from evedesign.system import SystemInstance
         from evedesign.dataset import LabeledInstanceDataset
 
+        if isinstance(self.splits, dict):
+            # exclude_unset to remove keys with None (e.g. validation set not specified)
+            splits = self.model_dump(exclude_unset=True)["splits"]
+        else:
+            splits = self.splits
+
+        if self.final_train_val_split is not None:
+            final_train_val_split = self.final_train_val_split.model_dump()
+        else:
+            final_train_val_split = None
+
         return LabeledInstanceDataset(
             instances=[
                 SystemInstance.deserialize(inst.model_dump()) for inst in self.instances
             ],
-            labels=self.labels
-        )
-
-class LabeledInstanceTrainTestDatasetSpec(BaseModel):
-    # mandatory training set
-    training_set: LabeledInstanceDatasetSpec
-
-    # optional test set
-    test_set: LabeledInstanceDatasetSpec | None = None
-
-    @property
-    def model_transformed(self):
-        # only import upon transformation in pipeline to avoid potentially costly imports in API
-        from evedesign.dataset import LabeledInstanceTrainTestDataset
-        return LabeledInstanceTrainTestDataset(
-            training_set=self.training_set.model_transformed,
-            test_set=self.test_set.model_transformed if self.test_set is not None else None,
+            labels=self.labels,
+            splits=splits,
+            final_train_val_split=final_train_val_split
         )
 
 
@@ -219,7 +228,7 @@ class SupervisedModelSpecBase(ModelSpecBase):
     """
     Base class for supervised models that receive labeled instances as data
     """
-    data: LabeledInstanceTrainTestDatasetSpec
+    data: LabeledInstanceDatasetSpec
 
     @property
     def data_transformed(self):
@@ -347,7 +356,6 @@ class SklearnPredictorArgsSpec(BaseModel):
     override_models_for_training: bool = False
     target_name: str | None = None
     pooling: Literal["mean", "max"] | None = Field("mean")
-    cv_folds: PositiveInt | None = 5
     batch_size: int | None = Field(128, ge=1, le=1024)
 
 
@@ -451,7 +459,8 @@ class ScoringStepSpec(BaseModel):
     # model to apply to instances for scoring
     scorer: ScorerSpec
 
-    # if None, will overwrite main score attribute of system instance
+    # if None, will overwrite main score attribute of system instance,
+    # otherwise, score will be routed to metadata
     metadata_key: str | None = None
 
 
