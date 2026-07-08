@@ -223,16 +223,19 @@ def execute(pipeline_spec: PipelineSpec, run_id: str) -> tuple[list[SystemInstan
             )
 
             # score instances
-            scores = scorer.score(system_instances)
+            scored_instances = scorer.score(system_instances)
 
-            # attach scores to instances, either as main score or in metadata
-            for j, score in enumerate(scores):
-                if step.metadata_key is None:
-                    system_instances[j].score = score
-                else:
-                    if system_instances[j].metadata is None:
-                        system_instances[j].metadata = {}
-                    system_instances[j].metadata[step.metadata_key] = score
+            # check if we keep the score as main score, or route to metadata
+            # on existing instances
+            if step.metadata_key is None:
+                system_instances = scored_instances
+            else:
+                for j, (instance, scored_instance) in enumerate(
+                    zip(system_instances, scored_instances)
+                ):
+                    if instance.metadata is None:
+                        instance.metadata = {}
+                    instance.metadata[step.metadata_key] = scored_instance.score
 
         elif isinstance(step, TransformationStepSpec):
             # instantiate transformer
