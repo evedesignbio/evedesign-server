@@ -30,7 +30,7 @@ api = [
   "sqlalchemy[asyncio]", "asyncpg", "psycopg[binary,pool]", "boto3", "aioboto3",
   "click",
 ]
-pipeline = ["dill", "evedesign"]
+pipeline = ["dill", "evedesign", "requests"]
 
 [project.urls]
 Documentation = "https://github.com/evedesignbio/evedesign-server#readme"

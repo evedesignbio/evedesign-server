@@ -14,7 +14,10 @@ from evedesign_server.config import Settings
 
 def execute_pipeline(
     spec: PipelineSpec | SingleMutationScanSpec | ProteinToDnaSpec,
-    job_id: str | UUID | None = None
+    job_id: str | UUID | None = None,
+    # TODO: already should receive full model spec here so we decouple from Settings(), could be tenant-specific
+    # TODO: should receive API base URL here for tracking - will contain tenant ID so should be dynamic
+    # TODO: should receive token here for API calls
 ) -> dict:
     # note that following imports require evedesign package to be present so carefully import this file
     from evedesign_server.pipeline import execute, protein_to_dna, single_mutation_scan, filter_a3m
@@ -22,6 +25,8 @@ def execute_pipeline(
 
     logger.info(f"Started Job ID: {job_id}")
 
+    # TODO: instantiate different tracker depending on params
+    # TODO: if API URL given, tracker should upload result spec to API
     # instantiate tracker (if connection string/AWS credentials are None, tracker will do nothing)
     tracker = Tracker(
         job_id=job_id

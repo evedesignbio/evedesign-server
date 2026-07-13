@@ -2,7 +2,7 @@
 API schemas for instantiating design module classes
 """
 from os import path
-from typing import Any, Annotated, Literal, Self, Optional
+from typing import Any, Annotated, Literal, Self, Optional, Callable
 
 from pydantic import BaseModel, Field, PositiveInt, PositiveFloat, model_validator, TypeAdapter
 from evedesign_server.constants import RESTRICTION_SITES
@@ -114,15 +114,26 @@ class ClassSpecBase(BaseModel):
     # arguments passed to constructor
     args: Any
 
-    # location where to retrieve previously built model (if not None)
-    location: str | None = None
+    # unique ID of class/model instance (will be used to serialize model)
+    id: str | None = None
+
+    # if specified, reload class based on this identifier (must be present in model repository,
+    # note we have two identifiers so a loaded model does not get overwritten if any changes are
+    # applied to it)
+    source_id: str | None = None
 
     @model_validator(mode="after")
     def _validate_spec(self) -> Self:
         # verify so user cannot inject a relative or absolute path
-        if self.location is not None and path.split(self.location)[-1] != self.location:
+        if self.source_id is not None and path.split(self.source_id)[-1] != self.source_id:
             raise ValueError(
-                "Invalid location specification"
+                "Invalid from_id specification"
+            )
+
+        # verify so user cannot inject a relative or absolute path
+        if self.id is not None and path.split(self.id)[-1] != self.id:
+            raise ValueError(
+                "Invalid id specification"
             )
 
         return self
@@ -158,6 +169,10 @@ class ModelSpecBase(ClassSpecBase):
 
     # summary statistics for model (e.g. correlation on fitting experimental data)
     stats: ModelStatsSpec | None = None
+
+    # if True, call build() again after loading (only has an effect if reuse=True);
+    # allows to e.g. finetune existing models
+    rebuild_on_load: bool = Field(default=False)
 
 
 class DatasetSplitSpec(BaseModel):
@@ -808,3 +823,29 @@ def condense_spec(spec: InputSpec):
 
     return spec_copy
 
+
+class ModelVariantDefinition(BaseModel):
+    # mapping of constructor param file argument names to
+    # external URL where these files can be retrieved
+    file_args: dict[str, str] | dict[str, list[tuple[str, str]]] | None
+
+    # default parameters to supply to model
+    args: dict[str, Any]
+
+
+class ModelDefinition(BaseModel):
+    # used to conditionally import models only when used
+    # using importlib
+    module_name: str
+    class_name: str
+
+    # defines whether to use GPU/CPU compute
+    gpu_required: bool
+
+    # different model variants of same base model
+    # (e.g. different model sizes); each can have its own
+    # set of default parameters passed to the constructor
+    variants: dict[str, ModelVariantDefinition]
+
+    # custom parameter applied to parameters before applying as model args
+    args_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None

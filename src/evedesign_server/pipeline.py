@@ -4,26 +4,66 @@ any backend-specific functionality must be implemented elsewhere / abstracted ou
 """
 from copy import deepcopy
 from importlib import import_module
-from os import path, makedirs
+from os import path
+from pathlib import Path
 import subprocess
 import tempfile
+from uuid import uuid4
 import dill as serializer
 from typing import Any
+import requests
 from loguru import logger
 from evedesign.system import System, SystemInstance
 from evedesign.sequence import read_fasta
-from evedesign_server.config import Settings
 from evedesign_server.schemas import (
     PipelineSpec, SystemInstanceSpec, GenerationStepSpec, ScoringStepSpec, TransformationStepSpec,
     ClassSpecBase, ModelSpecBase, ProteinToDnaSpec, ProteinToDnaResult, SingleMutationScanSpec,
-    SingleMutationScanResult, SingleMutWithScore, AnalysisStepSpec, SystemSpec, ModelStatsSpec
+    SingleMutationScanResult, SingleMutWithScore, AnalysisStepSpec, SystemSpec, ModelStatsSpec, ModelDefinition
 )
 
-SERIALIZATION_EXT = ".dill"
+
+def _create_headers(api_token: str | None = None) -> dict[str, str] | None:
+    """
+    Create header for model serialization API calls
+    Parameters
+    ----------
+    api_token
+        If serialization_url_or_path points to a URL, use this token for Bearer authentication
+    """
+    if api_token is not None:
+        return {
+            "Authorization": f"Bearer {api_token}",
+        }
+    else:
+        return None
+
+
+def _create_model_url(base_url: str, model_id: str) -> str:
+    """
+    Create header for model serialization API calls
+    Parameters
+    ----------
+    base_url
+        Base API URL
+    """
+    if not base_url.startswith("http://"):  # TODO: default to https
+        raise ValueError(
+            "Model serialization API URL must start with https://"
+        )
+
+    if not base_url.endswith("/"):
+        base_url = f"{base_url}/"
+
+    return base_url + model_id
+
 
 def instantiate_class(
     spec: ClassSpecBase | ModelSpecBase,
-    system: System | None
+    system: System | None,
+    model_definitions: dict[str, ModelDefinition],
+    model_param_root: Path,
+    serialization_path_or_url: str | Path | None = None,
+    api_token: str | None = None,
 ) -> tuple[
     Any, list[tuple[ClassSpecBase | ModelSpecBase, Any]]
 ]:
@@ -36,6 +76,16 @@ def instantiate_class(
         Declarative specification (specify location attribute to reload from that path)
     system
         Molecular system to be modelled with class
+    model_definitions
+        Map of unique model key to model settings. Must contain all models requested in spec or
+        class instantiation will fail.
+    model_param_root
+        Root path for fixed, pre-trained model parameters
+    serialization_path_or_url
+        If Path, deserialize models from this folder; if str, retrieve models from API and deserialize.
+        Make sure you trust this source, or otherwise unverified code may be executed.
+    api_token
+        If serialization_url_or_path points to a URL, use this token for Bearer authentication
 
     Returns
     -------
@@ -43,27 +93,53 @@ def instantiate_class(
       i) instantiated class
       ii) list of created models (tuples of specification and instance); instantiated class i) is at end of list
     """
-    # retrieve defaults for current model; we assume correctness here, if there
-    # is a KeyError below this means implementation/configuration is incorrect and must be fixed
-    s = Settings()
+    # reload model or class if requested
+    if spec.source_id:
+        if serialization_path_or_url is None:
+            raise ValueError(
+                "spec.from_id is defined but serialization_url_or_path is missing"
+            )
 
-    # if location is specified on class spec, reload it
-    if spec.location is not None and s.serialized_model_path is not None:
-        model_path = path.join(s.serialized_model_path, f"{spec.location}{SERIALIZATION_EXT}")
-        with open(model_path, "rb") as f:
-            class_inst = serializer.load(f)
+        if isinstance(serialization_path_or_url, Path):
+            with open(serialization_path_or_url / spec.source_id, "rb") as f:
+                class_inst = serializer.load(f)
+        else:
+            with requests.get(
+                _create_model_url(serialization_path_or_url, spec.source_id),
+                headers=_create_headers(api_token),
+            ) as response:
+                response.raise_for_status()
+                class_inst = serializer.loads(response.content)
 
         if class_inst.system != system:
             raise ValueError(
                 f"System of deserialized model {spec} does not agree with current system {system}"
             )
 
-        # return loaded instance, all submodels will be included (no new models added, so return empty list)
-        return class_inst, []
+        logger.info(f"Loaded model '{spec.source_id}' from '{serialization_path_or_url}'")
+
+        # if selected, rebuild to allow further finetuning
+        if isinstance(spec, ModelSpecBase) and spec.rebuild_on_load:
+            class_inst.build(
+                system=system, data=spec.data_transformed,
+            )
+
+            # update spec with model statistics
+            stats = class_inst.stats()
+            if stats is not None:
+                spec.stats = ModelStatsSpec(**stats)
+
+            logger.info(f"Rebuilt model '{spec.source_id}'")
+
+            # if we rebuilt the model, return it as a new model as internal state may have changed
+            return class_inst, [(spec, class_inst)]
+        else:
+            # return loaded instance, all submodels will be included (no new models added, so return empty list)
+            return class_inst, []
 
     # if class instance is not reloaded, create from scratch (however, nested classes might still be
     # reloaded in the following steps)
-    model_defaults = s.models[spec.key]
+    model_defaults = model_definitions[spec.key]
     variant_defaults = model_defaults.variants[spec.variant]
 
     logger.info(
@@ -84,9 +160,7 @@ def instantiate_class(
         args = {
             **args,
             **{
-                file_arg_name: path.join(
-                    s.model_param_root, spec.key, spec.variant, file_arg_name
-                )
+                file_arg_name: model_param_root / spec.key / spec.variant / file_arg_name
                 for file_arg_name in variant_defaults.file_args
             }
         }
@@ -99,7 +173,9 @@ def instantiate_class(
         for arg_name, arg_value in spec.args:
             # build single nested class/model
             if isinstance(arg_value, ClassSpecBase):
-                sub, sub_collection = instantiate_class(arg_value, system)
+                sub, sub_collection = instantiate_class(
+                    arg_value, system, model_definitions, model_param_root, serialization_path_or_url, api_token
+                )
                 new_model_collection.extend(sub_collection)
                 args[arg_name] = sub
 
@@ -108,7 +184,9 @@ def instantiate_class(
                 args[arg_name] = []
                 for arg_value_elem in arg_value:
                     assert isinstance(arg_value_elem, ClassSpecBase)
-                    sub, sub_collection = instantiate_class(arg_value_elem, system)
+                    sub, sub_collection = instantiate_class(
+                        arg_value_elem, system, model_definitions, model_param_root, serialization_path_or_url, api_token
+                    )
                     new_model_collection.extend(sub_collection)
                     args[arg_name].append(sub)
 
@@ -147,21 +225,45 @@ def instantiate_class(
 
     return class_inst, new_model_collection
 
-def _serialize_models(new_models, run_id, serialized_model_path, step_idx):
-    if new_models is not None and serialized_model_path is not None:
+
+def _serialize_models(
+    new_models,
+    serialization_path_or_url: str | Path | None = None,
+    api_token: str | None = None,
+):
+    if new_models is not None and serialization_path_or_url is not None:
         for model_idx, (model_spec, model) in enumerate(new_models):
-            makedirs(serialized_model_path, exist_ok=True)
-            model_id = f"{run_id}-{step_idx}-{model_idx}"
-            model_location = path.join(
-                serialized_model_path, f"{model_id}{SERIALIZATION_EXT}"
+            if model_spec.id is None:
+                # model_spec.id = str(uuid4())
+                # logger.info(f"No id present for model, generating new: {model_spec.id}")
+                logger.info(f"No id present for model, skipping serialization")
+                continue
+
+            # if path, serialize to file
+            if isinstance(serialization_path_or_url, Path):
+                with open(serialization_path_or_url / model_spec.id, "wb") as f:
+                    serializer.dump(model, f)
+            else:
+                serialized = serializer.dumps(model)
+                response = requests.post(
+                    _create_model_url(serialization_path_or_url, model_spec.id),
+                    headers=_create_headers(api_token),
+                    files={"file": ("object.pkl", serialized, "application/octet-stream")}
+                )
+                response.raise_for_status()
+
+            logger.info(
+                f"Serialized model: '{model_spec.id}' to '{serialization_path_or_url}'"
             )
-            with open(model_location, "wb") as f:
-                serializer.dump(model, f)
 
-            # update model location in place
-            model_spec.location = model_id
 
-def execute(pipeline_spec: PipelineSpec, run_id: str) -> tuple[list[SystemInstanceSpec], PipelineSpec]:
+def execute(
+    pipeline_spec: PipelineSpec,
+    model_definitions: dict[str, ModelDefinition],
+    model_param_root: Path,
+    serialization_path_or_url: str | Path | None = None,
+    api_token: str | None = None,
+) -> tuple[list[SystemInstanceSpec], PipelineSpec]:
     """
     Execute design pipeline specification
 
@@ -170,19 +272,24 @@ def execute(pipeline_spec: PipelineSpec, run_id: str) -> tuple[list[SystemInstan
     pipeline_spec
         Specification of generation/scoring/transformation steps to run in a system
         (possibly starting from existing system instances)
-    run_id
-        Unique identifier for run
+    model_definitions
+        Map of unique model key to model settings. Must contain all models requested in spec or
+        class instantiation will fail.
+    model_param_root
+        Root path for fixed, pre-trained model parameters
+    serialization_path_or_url
+        If Path, deserialize models from this folder; if str, retrieve models from API and deserialize.
+        Make sure you trust this source, or otherwise unverified code may be executed.
+    api_token
+        If serialization_url_or_path points to a URL, use this token for Bearer authentication
 
     Returns
     -------
     instances
-        Instances generated/scored/transformed by running through pipeline
+        The instances generated/scored/transformed by running through pipeline
     pipeline_spec
         Updated version of specification with locations of saved individual models
     """
-    # retrieve settings
-    s = Settings()
-
     # make a deep copy of spec as we will mutate it in place to track saved models
     pipeline_spec = deepcopy(pipeline_spec)
 
@@ -208,7 +315,7 @@ def execute(pipeline_spec: PipelineSpec, run_id: str) -> tuple[list[SystemInstan
         if isinstance(step, GenerationStepSpec):
             # instantiate generator
             generator, new_models = instantiate_class(
-                step.generator, system
+                step.generator, system, model_definitions, model_param_root, serialization_path_or_url, api_token
             )
 
             # generate new designs
@@ -219,7 +326,7 @@ def execute(pipeline_spec: PipelineSpec, run_id: str) -> tuple[list[SystemInstan
         elif isinstance(step, ScoringStepSpec):
             # instantiate scorer
             scorer, new_models = instantiate_class(
-                step.scorer, system
+                step.scorer, system, model_definitions, model_param_root, serialization_path_or_url, api_token
             )
 
             # score instances
@@ -240,7 +347,7 @@ def execute(pipeline_spec: PipelineSpec, run_id: str) -> tuple[list[SystemInstan
         elif isinstance(step, TransformationStepSpec):
             # instantiate transformer
             transformer, new_models = instantiate_class(
-                step.transformer, system
+                step.transformer, system, model_definitions, model_param_root, serialization_path_or_url, api_token
             )
 
             # transform instances
@@ -248,7 +355,7 @@ def execute(pipeline_spec: PipelineSpec, run_id: str) -> tuple[list[SystemInstan
         elif isinstance(step, AnalysisStepSpec):
             # instantiate analyzer
             analyzer, new_models = instantiate_class(
-                step.analyzer, system
+                step.analyzer, system, model_definitions, model_param_root, serialization_path_or_url, api_token
             )
 
             # run analysis
@@ -264,7 +371,7 @@ def execute(pipeline_spec: PipelineSpec, run_id: str) -> tuple[list[SystemInstan
 
         # serialize newly created models after each step
         _serialize_models(
-            new_models, run_id, s.serialized_model_path, i
+            new_models, serialization_path_or_url, api_token
         )
 
     # serialize system instances with custom serializer, then turn into pydantic model for easier integration
@@ -278,7 +385,10 @@ def execute(pipeline_spec: PipelineSpec, run_id: str) -> tuple[list[SystemInstan
 
 def single_mutation_scan(
     single_mutation_scan_spec: SingleMutationScanSpec,
-    run_id: str
+    model_definitions: dict[str, ModelDefinition],
+    model_param_root: Path,
+    serialization_path_or_url: str | Path | None = None,
+    api_token: str | None = None,
 ) -> tuple[
     list[SingleMutationScanResult], SingleMutationScanSpec
 ]:
@@ -289,8 +399,16 @@ def single_mutation_scan(
     ----------
     single_mutation_scan_spec
         Specification to execute
-    run_id
-        Unique identifier for run
+    model_definitions
+        Map of unique model key to model settings. Must contain all models requested in spec or
+        class instantiation will fail.
+    model_param_root
+        Root path for fixed, pre-trained model parameters
+    serialization_path_or_url
+        If Path, deserialize models from this folder; if str, retrieve models from API and deserialize.
+        Make sure you trust this source, or otherwise unverified code may be executed.
+    api_token
+        If serialization_url_or_path points to a URL, use this token for Bearer authentication
 
     Returns
     -------
@@ -299,9 +417,6 @@ def single_mutation_scan(
     single_mutation_scan_spec
         Updated version of specification with locations of saved model(s)
     """
-    # retrieve settings
-    s = Settings()
-
     # make a deep copy of spec as we will mutate it in place to track saved models
     single_mutation_scan_spec = deepcopy(single_mutation_scan_spec)
 
@@ -316,7 +431,8 @@ def single_mutation_scan(
 
     # instantiate scorer
     scorer, new_models = instantiate_class(
-        single_mutation_scan_spec.scorer, system
+        single_mutation_scan_spec.scorer, system, model_definitions, model_param_root,
+        serialization_path_or_url, api_token
     )
 
     # score single mutations
@@ -328,7 +444,7 @@ def single_mutation_scan(
 
     # serialize newly created models after each step
     _serialize_models(
-        new_models, run_id, s.serialized_model_path, step_idx=0
+        new_models, serialization_path_or_url, api_token
     )
 
     # drop any null values (e.g. due to mixed alphabets across multiple entities)
@@ -350,7 +466,14 @@ def single_mutation_scan(
     # return serialized mutant scores and updated pipeline spec with stored model locations
     return single_scores, single_mutation_scan_spec
 
-def protein_to_dna(protein_to_dna_spec: ProteinToDnaSpec) -> list[ProteinToDnaResult]:
+
+def protein_to_dna(
+    protein_to_dna_spec: ProteinToDnaSpec,
+    model_definitions: dict[str, ModelDefinition],
+    model_param_root: Path,
+    serialization_path_or_url: str | Path | None = None,
+    api_token: str | None = None,
+) -> list[ProteinToDnaResult]:
     """
     Execute protein-to-dna specification (e.g. codon optimization)
 
@@ -361,6 +484,16 @@ def protein_to_dna(protein_to_dna_spec: ProteinToDnaSpec) -> list[ProteinToDnaRe
     ----------
     protein_to_dna_spec
         Specification to execute
+    model_definitions
+        Map of unique model key to model settings. Must contain all models requested in spec or
+        class instantiation will fail.
+    model_param_root
+        Root path for fixed, pre-trained model parameters
+    serialization_path_or_url
+        If Path, deserialize models from this folder; if str, retrieve models from API and deserialize.
+        Make sure you trust this source, or otherwise unverified code may be executed.
+    api_token
+        If serialization_url_or_path points to a URL, use this token for Bearer authentication
 
     Returns
     -------
@@ -368,7 +501,8 @@ def protein_to_dna(protein_to_dna_spec: ProteinToDnaSpec) -> list[ProteinToDnaRe
     """
     # instantiate codon optimizer
     opt, _ = instantiate_class(
-        protein_to_dna_spec.optimizer, system=None
+        protein_to_dna_spec.optimizer, None,
+        model_definitions, model_param_root, serialization_path_or_url, api_token
     )
 
     # prepare arguments for optimize call
