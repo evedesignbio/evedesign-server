@@ -8,7 +8,6 @@ from os import path
 from pathlib import Path
 import subprocess
 import tempfile
-from uuid import uuid4
 import dill as serializer
 from typing import Any
 import requests
