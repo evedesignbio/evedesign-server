@@ -46,7 +46,7 @@ def _create_model_url(base_url: str, model_id: str) -> str:
     base_url
         Base API URL
     """
-    if not base_url.startswith("http://"):  # TODO: default to https
+    if not base_url.startswith("https://"):
         raise ValueError(
             "Model serialization API URL must start with https://"
         )
