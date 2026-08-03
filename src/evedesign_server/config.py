@@ -188,6 +188,35 @@ class Settings(BaseSettings):
             },
         },
 
+        # Boltz-2 model
+        "boltz2": {
+            "module_name": "evedesign.models.boltzfold",
+            "class_name": "BoltzFoldTransformer",
+            "gpu_required": True,
+            "variants": {
+                "default": {
+                    "file_args": {
+                        "model_dir_path": [
+                            (
+                                "mols.tar",
+                                "https://huggingface.co/boltz-community/boltz-2/resolve/main/mols.tar"
+                            ),
+                            (
+                                "boltz2_conf.ckpt",
+                                "https://huggingface.co/boltz-community/boltz-2/resolve/main/boltz2_conf.ckpt"
+                            ),
+                            (
+                                "boltz2_aff.ckpt",
+                                "https://huggingface.co/boltz-community/boltz-2/resolve/main/boltz2_aff.ckpt"
+                            ),
+                        ]
+                    },
+                    "args": {
+                    }
+                }
+            },
+        },
+
         # DNAchisel codon optimizer
         "dnachisel": {
             "module_name": "evedesign.codons.dnachisel",
