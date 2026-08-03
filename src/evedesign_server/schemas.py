@@ -322,6 +322,29 @@ class ESM2Spec(ModelSpecBase):
     data: None = None
 
 
+class Boltz2ArgsSpec(BaseModel):
+    """
+    Parameters of ESM2 that can be modified based on job specification;
+    will override any defaults specified in config.py
+    """
+    batch_size: int | Literal["auto"] = Field(64, ge=1, le=1024)
+    # TODO: add more parameters
+
+
+class Boltz2Spec(ModelSpecBase):
+    # note: must match keys specified in config.py
+    key: Literal["boltz2"]
+    variant: Literal["default"] = Field("default")
+
+    # user-exposed model parameters with strict verification
+    args: Boltz2ArgsSpec = Field(
+        default_factory=Boltz2ArgsSpec
+    )
+
+    # model does not take any additional data as input, so fix to None
+    data: None = None
+
+
 class SeqDistRestraintTargetSpec(BaseModel):
     """
     Single target sequence for entity sequence restraints
@@ -399,7 +422,7 @@ ConditionalMutationScorerSpec = Annotated[
 
 # discriminated union - list all classes implementing "Transformer" interface here
 TransformerSpec = Annotated[
-    EVmutation2Spec | ESM2Spec,
+    EVmutation2Spec | ESM2Spec | Boltz2Spec,
     Field(discriminator="key")
 ]
 

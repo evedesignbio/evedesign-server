@@ -212,6 +212,15 @@ class Settings(BaseSettings):
                         ]
                     },
                     "args": {
+                        "batch_size": 64,
+                        "sampling_steps": 200,
+                        "diffusion_samples": 1,
+                        "recycling_steps": 3,
+                        "use_msa": True,
+                        "score_attribute": "confidence_score",
+                        "confidence_attribute":"complex_plddt",
+                        "keep_model_after_build": False,
+                        "device": "cuda",
                     }
                 }
             },
