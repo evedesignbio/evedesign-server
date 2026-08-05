@@ -347,7 +347,7 @@ class Boltz2Spec(ModelSpecBase):
 
 class MixMHC2PredArgsSpec(BaseModel):
     """
-    Arguments for exposed sequence motif restraint
+    Arguments for MixMHC2pred allele scorer
     """
     alleles: dict[
         HLA_CLASS2_ALLELES_TYPE, Annotated[float, Field(ge=0)]   # noqa
@@ -418,7 +418,8 @@ class ExposedMotifRestraintArgsSpec(BaseModel):
     """
     Arguments for exposed sequence motif restraint
     """
-    motifs: list[MotifSpec] = Field(min_length=1, max_length=64)
+    # motifs: list[MotifSpec] = Field(min_length=1, max_length=64)  # TODO: revert to validated form, cannot ingest directly
+    motifs: list[dict[str, Any]] = Field(min_length=1, max_length=64)
     exposure_cutoff: float = Field(default=0.2, ge=0, le=1)
     exposure_source: Literal["system", "instance"] | None = Field(default="system")
     exposure_agg: Literal["mean", "median", "min", "max"] = Field(default="max")
