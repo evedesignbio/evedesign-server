@@ -61,6 +61,7 @@ class EntitySpec(BaseModel):
     id: str
     first_index: PositiveInt
     sequences: SequencesSpec | None
+    structures: dict[str, list[str]] | None
     deletions: bool | None = False
 
 
