@@ -5,7 +5,7 @@ from os import path
 from typing import Any, Annotated, Literal, Self, Optional, Callable
 
 from pydantic import BaseModel, Field, PositiveInt, PositiveFloat, model_validator, TypeAdapter
-from evedesign_server.constants import RESTRICTION_SITES
+from evedesign_server.constants import RESTRICTION_SITES, HLA_CLASS2_ALLELES_TYPE
 
 # duplication of type from main package
 BioPolymer = Literal["protein", "dna", "rna"]
@@ -324,7 +324,7 @@ class ESM2Spec(ModelSpecBase):
 
 class Boltz2ArgsSpec(BaseModel):
     """
-    Parameters of ESM2 that can be modified based on job specification;
+    Parameters of Boltz2 that can be modified based on job specification;
     will override any defaults specified in config.py
     """
     batch_size: int | Literal["auto"] = Field(64, ge=1, le=1024)
@@ -342,6 +342,38 @@ class Boltz2Spec(ModelSpecBase):
     )
 
     # model does not take any additional data as input, so fix to None
+    data: None = None
+
+
+class MixMHC2PredArgsSpec(BaseModel):
+    """
+    Arguments for exposed sequence motif restraint
+    """
+    alleles: dict[
+        HLA_CLASS2_ALLELES_TYPE, Annotated[float, Field(ge=0)]   # noqa
+    ] = Field(min_length=1)
+
+    peptide_lengths: list[
+        Annotated[int, Field(ge=9, le=21)]
+    ] = Field(
+        default=[15], min_length=1, max_length=13
+    )
+
+    floor_rank: float = Field(
+        default=1e-05, ge=0, le=1
+    )
+
+    truncate_rank: float | None = Field(
+        default=None, ge=0, le=100
+    )
+
+
+class MixMHC2PredSpec(ModelSpecBase):
+    key: Literal["mixmhc2pred"]
+    variant: Literal["default"]
+    args: MixMHC2PredArgsSpec = Field(
+        default_factory=MixMHC2PredArgsSpec
+    )
     data: None = None
 
 
@@ -371,6 +403,35 @@ class LinearSeqDistRestraintSpec(ModelSpecBase):
             data_t[entity_seq_spec.entity].append(entity_seq_spec.rep)
 
         return data_t
+
+
+class MotifSpec(BaseModel):
+    name: str
+    regex: str = Field(min_length=1) # TODO: validate valid regex
+
+    # no constraint on offset values to allow maximum flexibility, values
+    # are extracted using dict.get in corresponding class
+    exposure_offsets: list[int]
+
+
+class ExposedMotifRestraintArgsSpec(BaseModel):
+    """
+    Arguments for exposed sequence motif restraint
+    """
+    motifs: list[MotifSpec] = Field(min_length=1, max_length=64)
+    exposure_cutoff: float = Field(default=0.2, ge=0, le=1)
+    exposure_source: Literal["system", "instance"] | None = Field(default="system")
+    exposure_agg: Literal["mean", "median", "min", "max"] = Field(default="max")
+    missing_exposure: Literal["exclude", "include"] = Field(default="include")
+
+
+class ExposedMotifRestraintSpec(ModelSpecBase):
+    key: Literal["exposed_motif_restraint"]
+    variant: Literal["default"]
+    args: ExposedMotifRestraintArgsSpec = Field(
+        default_factory=ExposedMotifRestraintArgsSpec
+    )
+    data: None = None
 
 
 class SklearnPredictorArgsSpec(BaseModel):
@@ -410,13 +471,15 @@ class SklearnPredictorSpec(SupervisedModelSpecBase):
 
 # discriminated union - list all classes implementing "Scorer" interface here
 ScorerSpec = Annotated[
-    EVmutation2Spec | ESM2Spec | SklearnPredictorSpec | LinearSeqDistRestraintSpec,
+    EVmutation2Spec | ESM2Spec | SklearnPredictorSpec | MixMHC2PredSpec |
+    ExposedMotifRestraintSpec | LinearSeqDistRestraintSpec,
     Field(discriminator="key")
 ]
 
 # discriminated union - list all classes implementing "ConditionalMutationScorer" interface here
 ConditionalMutationScorerSpec = Annotated[
-    EVmutation2Spec | ESM2Spec | SklearnPredictorSpec | LinearSeqDistRestraintSpec,
+    EVmutation2Spec | ESM2Spec | SklearnPredictorSpec | MixMHC2PredSpec |
+    ExposedMotifRestraintSpec | LinearSeqDistRestraintSpec,
     Field(discriminator="key")
 ]
 

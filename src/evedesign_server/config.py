@@ -226,6 +226,35 @@ class Settings(BaseSettings):
             },
         },
 
+        # MixMHC2pred. Academic use only, binary and PWMdef needs to be installed in environment
+        "mixmhc2pred": {
+            "module_name": "evedesign.models.immunogenicity",
+            "class_name": "MixMHC2pred",
+            "gpu_required": False,
+            "variants": {
+                "default": {
+                    "file_args": None,
+                    "args": {
+                        "binary": "MixMHC2pred",
+                        "prediction_cache_size": 10 ** 8,
+                    }
+                }
+            },
+        },
+
+        # Surface-exposed sequence liabilities
+        "exposed_motif_restraint": {
+            "module_name": "evedesign.restraints.motif",
+            "class_name": "ExposedMotifRestraint",
+            "gpu_required": False,
+            "variants": {
+                "default": {
+                    "file_args": None,
+                    "args": {}
+                }
+            },
+        },
+
         # DNAchisel codon optimizer
         "dnachisel": {
             "module_name": "evedesign.codons.dnachisel",
