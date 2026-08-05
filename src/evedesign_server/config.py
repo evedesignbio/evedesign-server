@@ -229,7 +229,7 @@ class Settings(BaseSettings):
         # MixMHC2pred. Academic use only, binary and PWMdef needs to be installed in environment
         "mixmhc2pred": {
             "module_name": "evedesign.models.immunogenicity",
-            "class_name": "MixMHC2pred",
+            "class_name": "MixMHC2Pred",
             "gpu_required": False,
             "variants": {
                 "default": {
