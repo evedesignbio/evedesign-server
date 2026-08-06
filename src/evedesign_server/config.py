@@ -237,6 +237,7 @@ class Settings(BaseSettings):
                     "args": {
                         "binary": "MixMHC2pred",
                         "prediction_cache_size": 10 ** 8,
+                        "cpu": None,
                     }
                 }
             },
