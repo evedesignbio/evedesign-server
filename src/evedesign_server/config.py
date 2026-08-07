@@ -236,7 +236,7 @@ class Settings(BaseSettings):
                     "file_args": None,
                     "args": {
                         "binary": "MixMHC2pred",
-                        "prediction_cache_size": 10 ** 8,
+                        "prediction_cache_size": 10 ** 6,
                         "cpu": None,
                     }
                 }
