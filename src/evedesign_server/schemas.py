@@ -63,6 +63,7 @@ class EntitySpec(BaseModel):
     sequences: SequencesSpec | None
     structures: dict[str, list[str]] | None
     deletions: bool | None = False
+    copies: int | None = None
 
 
 class SystemSpec(BaseModel):
