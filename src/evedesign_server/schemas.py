@@ -328,8 +328,19 @@ class Boltz2ArgsSpec(BaseModel):
     Parameters of Boltz2 that can be modified based on job specification;
     will override any defaults specified in config.py
     """
-    batch_size: int | Literal["auto"] = Field(64, ge=1, le=1024)
-    # TODO: add more parameters
+    batch_size: int | Literal["auto"] = Field(16, ge=1, le=1024)
+    sampling_steps: int = Field(200, ge=1, le=1000)
+    diffusion_samples: int = Field(1, ge=1, le=16)
+    recycling_steps: int = Field(3, ge=1, le=8)
+    use_msa: bool = Field(True)
+
+    score_attribute: Literal[
+        "iptm", "ptm", "confidence_score", "complex_plddt"
+    ] = Field("confidence_score")
+
+    confidence_attribute: Literal[
+        "iptm", "ptm", "confidence_score", "complex_plddt"
+    ] = Field("complex_plddt")
 
 
 class Boltz2Spec(ModelSpecBase):
