@@ -84,7 +84,7 @@ class EntityInstanceSpec(BaseModel):
     TODO: increase required minimum length to scientifically meaningful limit
     TODO: add embeddings
     """
-    rep: str = Field(min_length=1, pattern=VALID_REP_PATTERN)
+    rep: str = Field(min_length=1, pattern=VALID_PROTEIN_REP_WITH_DELETION_PATTERN)
     # serialized CIF models
     models: dict[str, list[str]] | None
 
