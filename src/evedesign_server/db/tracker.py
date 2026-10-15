@@ -10,6 +10,28 @@ from evedesign_server.db.engine import get_sync_engine
 from evedesign_server.db.models import JobStatus
 from evedesign_server.config import Settings
 
+def json_default(obj: Any) -> Any:
+    """
+    json.dump/dumps hook for values pydantic passes through untouched.
+
+    Model scores can carry numpy scalars: a scorer that builds its values with
+    an integer numpy dtype (e.g. LinearSeqDistRestraint, via
+    np.zeros(..., dtype="int")) yields np.int64. A typed field such as
+    `score: float | None` coerces those, but `metadata: dict[str, Any]` is
+    untyped, so a score routed there by a step's `metadata_key` survives as
+    np.int64 and json rejects it with "Object of type int64 is not JSON
+    serializable".
+
+    Note model_dump(mode="json") does NOT help here: it raises
+    PydanticSerializationError on the same value before json is reached.
+    """
+    if hasattr(obj, "item"):        # numpy scalar / 0-d array
+        return obj.item()
+    raise TypeError(
+        f"Object of type {type(obj).__name__} is not JSON serializable"
+    )
+
+
 def serialize_results(results: dict[str, Any]):
     return {
         k: (
@@ -82,7 +104,9 @@ class Tracker:
         if results is not None:
             results_json = serialize_results(results)
 
-            results_dump = json.dumps(results_json).encode()
+            results_dump = json.dumps(
+                results_json, default=json_default
+            ).encode()
             s3 = boto3.client(
                 "s3",
                 region_name=self.settings.aws_region_name,

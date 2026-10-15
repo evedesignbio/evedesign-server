@@ -142,14 +142,14 @@ def run(job_id):
     required=False,
 )
 def runfile(input_spec_path: Path, result_file_path: Path, job_id: UUID | None):
-    from evedesign_server.db.tracker import serialize_results
+    from evedesign_server.db.tracker import json_default, serialize_results
     res = execute_pipeline(
         load_spec_from_file(input_spec_path), job_id
     )
 
     res_json = serialize_results(res)
     with open(result_file_path, "w") as f:
-        json.dump(res_json, f)  # noqa
+        json.dump(res_json, f, default=json_default)  # noqa
 
 if __name__ == "__main__":
     cli()
