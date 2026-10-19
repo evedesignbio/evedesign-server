@@ -68,16 +68,6 @@ class Base(DeclarativeBase):
     id: Mapped[UUID] = mapped_column(default=uuid4, primary_key=True)
 
 
-class User(Base):
-    __tablename__ = "users"
-    __table_args__ = {
-        "schema": "auth", "keep_existing": True
-    }
-
-    # user email address
-    email: Mapped[str]
-
-
 class ServerUser(Base):
     """
     Per-user allocated compute credit
@@ -87,9 +77,8 @@ class ServerUser(Base):
     # user/owner who created this run (foreign key to user schema);
     # following https://supabase.com/docs/guides/auth/managing-user-data
     id: Mapped[UUID] = mapped_column(
-        ForeignKey(AUTH_USERS_TABLENAME), primary_key=True
+        primary_key=True
     )
-    user: Mapped[User] = relationship()
 
     job_priority: Mapped[float] = mapped_column(default=1)
     balance: Mapped[float] = mapped_column(default=0)

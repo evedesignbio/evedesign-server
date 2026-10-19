@@ -1,7 +1,7 @@
 import datetime
 from typing import Sequence
 from uuid import UUID, uuid4
-from sqlalchemy import select, delete, update, bindparam
+from sqlalchemy import select, delete, update
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 from evedesign_server.db.models import ComputeJob, JobQueue, ServerUser, JobStatus
