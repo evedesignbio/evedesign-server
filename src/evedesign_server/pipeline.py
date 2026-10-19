@@ -437,16 +437,30 @@ def filter_a3m(
                     outfile.write(f">{seq.id}\n")
                     outfile.write(f"{seq.seq}\n")
 
-            subprocess.run(
-                [
-                    hhfilter_path,
-                    "-i", msa_source,
-                    "-o", msa_target,
-                    "-id", str(hhfilter_id_cutoff)
-                ],
-                capture_output=True,
-                shell=False
-            )
+            try:
+                result = subprocess.run(
+                    [
+                        hhfilter_path,
+                        "-i", msa_source,
+                        "-o", msa_target,
+                        "-id", str(hhfilter_id_cutoff)
+                    ],
+                    capture_output=True,
+                    shell=False
+                )
+            except FileNotFoundError as e:
+                raise RuntimeError(
+                    f"hhfilter not found at '{hhfilter_path}'. It is required to "
+                    f"filter the alignment of entity '{entity.id}'; install hhsuite "
+                    f"or pass hhfilter_path."
+                ) from e
+
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"hhfilter failed with exit code {result.returncode} while "
+                    f"filtering the alignment of entity '{entity.id}'.\n"
+                    f"stderr: {result.stderr.decode(errors='replace').strip()}"
+                )
 
             # rebuild sequence list from remaining sequences
             with open(msa_target) as infile:
