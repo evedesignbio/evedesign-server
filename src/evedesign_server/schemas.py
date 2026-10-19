@@ -60,8 +60,8 @@ class EntitySpec(BaseModel):
     rep: str = Field(min_length=1, pattern=VALID_REP_PATTERN)
     id: str
     first_index: PositiveInt
-    sequences: SequencesSpec | None
-    structures: dict[str, list[str]] | None
+    sequences: SequencesSpec | None = None
+    structures: dict[str, list[str]] | None = None
     deletions: bool | None = False
     copies: int | None = None
 
