@@ -14,11 +14,13 @@ from evedesign_server.config import Settings
 
 def execute_pipeline(
     spec: PipelineSpec | SingleMutationScanSpec | ProteinToDnaSpec,
-    job_id: str | UUID | None = None
+    job_id: str | UUID | None = None,
 ) -> dict:
     # note that following imports require evedesign package to be present so carefully import this file
     from evedesign_server.pipeline import execute, protein_to_dna, single_mutation_scan, filter_a3m
     from evedesign_server.db.tracker import Tracker
+
+    s = Settings()
 
     logger.info(f"Started Job ID: {job_id}")
 
@@ -36,9 +38,13 @@ def execute_pipeline(
         if isinstance(spec, PipelineSpec) or isinstance(spec, SingleMutationScanSpec):
             spec = filter_a3m(spec)
 
+        serialization_path = Path(s.serialized_model_path) if s.serialized_model_path else None
+
         # execute the pipeline run
         if isinstance(spec, PipelineSpec):
-            result, updated_pipeline_spec = execute(spec, job_id)
+            result, updated_pipeline_spec = execute(
+                spec, s.models, Path(s.model_param_root), serialization_path
+            )
 
             # merge result and pipeline spec together for storing
             result = {
@@ -46,14 +52,18 @@ def execute_pipeline(
                 "instances": result,
             }
         elif isinstance(spec, SingleMutationScanSpec):
-            result, updated_single_spec = single_mutation_scan(spec, job_id)
+            result, updated_single_spec = single_mutation_scan(
+                spec, s.models, Path(s.model_param_root), serialization_path
+            )
             # merge result and pipeline spec together for storing
             result = {
                 "spec": updated_single_spec,
                 "scores": result,
             }
         elif isinstance(spec, ProteinToDnaSpec):
-            result = protein_to_dna(spec)
+            result = protein_to_dna(
+                spec, s.models, Path(s.model_param_root), serialization_path
+            )
             # merge result and protein to dna spec together for storing
             result = {
                 "spec": spec,

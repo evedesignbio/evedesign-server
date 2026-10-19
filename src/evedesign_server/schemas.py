@@ -2,10 +2,10 @@
 API schemas for instantiating design module classes
 """
 from os import path
-from typing import Any, Annotated, Literal, Self, Optional
+from typing import Any, Annotated, Literal, Self, Optional, Callable
 
 from pydantic import BaseModel, Field, PositiveInt, PositiveFloat, model_validator, TypeAdapter
-from evedesign_server.constants import RESTRICTION_SITES
+from evedesign_server.constants import RESTRICTION_SITES, HLA_CLASS2_ALLELES_TYPE
 
 # duplication of type from main package
 BioPolymer = Literal["protein", "dna", "rna"]
@@ -60,8 +60,10 @@ class EntitySpec(BaseModel):
     rep: str = Field(min_length=1, pattern=VALID_REP_PATTERN)
     id: str
     first_index: PositiveInt
-    sequences: SequencesSpec | None
+    sequences: SequencesSpec | None = None
+    structures: dict[str, list[str]] | None = None
     deletions: bool | None = False
+    copies: int | None = None
 
 
 class SystemSpec(BaseModel):
@@ -82,7 +84,7 @@ class EntityInstanceSpec(BaseModel):
     TODO: increase required minimum length to scientifically meaningful limit
     TODO: add embeddings
     """
-    rep: str = Field(min_length=1, pattern=VALID_REP_PATTERN)
+    rep: str = Field(min_length=1, pattern=VALID_PROTEIN_REP_WITH_DELETION_PATTERN)
     # serialized CIF models
     models: dict[str, list[str]] | None
 
@@ -114,15 +116,26 @@ class ClassSpecBase(BaseModel):
     # arguments passed to constructor
     args: Any
 
-    # location where to retrieve previously built model (if not None)
-    location: str | None = None
+    # unique ID of class/model instance (will be used to serialize model)
+    id: str | None = None
+
+    # if specified, reload class based on this identifier (must be present in model repository,
+    # note we have two identifiers so a loaded model does not get overwritten if any changes are
+    # applied to it)
+    source_id: str | None = None
 
     @model_validator(mode="after")
     def _validate_spec(self) -> Self:
         # verify so user cannot inject a relative or absolute path
-        if self.location is not None and path.split(self.location)[-1] != self.location:
+        if self.source_id is not None and path.split(self.source_id)[-1] != self.source_id:
             raise ValueError(
-                "Invalid location specification"
+                "Invalid from_id specification"
+            )
+
+        # verify so user cannot inject a relative or absolute path
+        if self.id is not None and path.split(self.id)[-1] != self.id:
+            raise ValueError(
+                "Invalid id specification"
             )
 
         return self
@@ -158,6 +171,10 @@ class ModelSpecBase(ClassSpecBase):
 
     # summary statistics for model (e.g. correlation on fitting experimental data)
     stats: ModelStatsSpec | None = None
+
+    # if True, call build() again after loading (only has an effect if reuse=True);
+    # allows to e.g. finetune existing models
+    rebuild_on_load: bool = Field(default=False)
 
 
 class DatasetSplitSpec(BaseModel):
@@ -307,6 +324,72 @@ class ESM2Spec(ModelSpecBase):
     data: None = None
 
 
+class Boltz2ArgsSpec(BaseModel):
+    """
+    Parameters of Boltz2 that can be modified based on job specification;
+    will override any defaults specified in config.py
+    """
+    batch_size: int | Literal["auto"] = Field(16, ge=1, le=1024)
+    sampling_steps: int = Field(200, ge=1, le=1000)
+    diffusion_samples: int = Field(1, ge=1, le=16)
+    recycling_steps: int = Field(3, ge=1, le=8)
+    use_msa: bool = Field(True)
+
+    score_attribute: Literal[
+        "iptm", "ptm", "confidence_score", "complex_plddt"
+    ] = Field("confidence_score")
+
+    confidence_attribute: Literal[
+        "iptm", "ptm", "confidence_score", "complex_plddt"
+    ] = Field("complex_plddt")
+
+
+class Boltz2Spec(ModelSpecBase):
+    # note: must match keys specified in config.py
+    key: Literal["boltz2"]
+    variant: Literal["default"] = Field("default")
+
+    # user-exposed model parameters with strict verification
+    args: Boltz2ArgsSpec = Field(
+        default_factory=Boltz2ArgsSpec
+    )
+
+    # model does not take any additional data as input, so fix to None
+    data: None = None
+
+
+class MixMHC2PredArgsSpec(BaseModel):
+    """
+    Arguments for MixMHC2pred allele scorer
+    """
+    alleles: dict[
+        HLA_CLASS2_ALLELES_TYPE, Annotated[float, Field(ge=0)]   # noqa
+    ] = Field(min_length=1)
+
+    peptide_lengths: list[
+        Annotated[int, Field(ge=9, le=21)]
+    ] = Field(
+        default=[15], min_length=1, max_length=13
+    )
+
+    floor_rank: float = Field(
+        default=1e-05, ge=0, le=1
+    )
+
+    truncate_rank: float | None = Field(
+        default=None, ge=0, le=100
+    )
+
+
+class MixMHC2PredSpec(ModelSpecBase):
+    key: Literal["mixmhc2pred"]
+    variant: Literal["default"]
+    args: MixMHC2PredArgsSpec = Field(
+        default_factory=MixMHC2PredArgsSpec
+    )
+    data: None = None
+
+
 class SeqDistRestraintTargetSpec(BaseModel):
     """
     Single target sequence for entity sequence restraints
@@ -333,6 +416,36 @@ class LinearSeqDistRestraintSpec(ModelSpecBase):
             data_t[entity_seq_spec.entity].append(entity_seq_spec.rep)
 
         return data_t
+
+
+class MotifSpec(BaseModel):
+    name: str
+    regex: str = Field(min_length=1) # TODO: validate valid regex
+
+    # no constraint on offset values to allow maximum flexibility, values
+    # are extracted using dict.get in corresponding class
+    exposure_offsets: list[int]
+
+
+class ExposedMotifRestraintArgsSpec(BaseModel):
+    """
+    Arguments for exposed sequence motif restraint
+    """
+    # motifs: list[MotifSpec] = Field(min_length=1, max_length=64)  # TODO: revert to validated form, cannot ingest directly
+    motifs: list[dict[str, Any]] = Field(min_length=1, max_length=64)
+    exposure_cutoff: float = Field(default=0.2, ge=0, le=1)
+    exposure_source: Literal["system", "instance"] | None = Field(default="system")
+    exposure_agg: Literal["mean", "median", "min", "max"] = Field(default="max")
+    missing_exposure: Literal["exclude", "include"] = Field(default="include")
+
+
+class ExposedMotifRestraintSpec(ModelSpecBase):
+    key: Literal["exposed_motif_restraint"]
+    variant: Literal["default"]
+    args: ExposedMotifRestraintArgsSpec = Field(
+        default_factory=ExposedMotifRestraintArgsSpec
+    )
+    data: None = None
 
 
 class SklearnPredictorArgsSpec(BaseModel):
@@ -372,19 +485,21 @@ class SklearnPredictorSpec(SupervisedModelSpecBase):
 
 # discriminated union - list all classes implementing "Scorer" interface here
 ScorerSpec = Annotated[
-    EVmutation2Spec | ESM2Spec | SklearnPredictorSpec | LinearSeqDistRestraintSpec,
+    EVmutation2Spec | ESM2Spec | SklearnPredictorSpec | MixMHC2PredSpec |
+    ExposedMotifRestraintSpec | LinearSeqDistRestraintSpec,
     Field(discriminator="key")
 ]
 
 # discriminated union - list all classes implementing "ConditionalMutationScorer" interface here
 ConditionalMutationScorerSpec = Annotated[
-    EVmutation2Spec | ESM2Spec | SklearnPredictorSpec | LinearSeqDistRestraintSpec,
+    EVmutation2Spec | ESM2Spec | SklearnPredictorSpec | MixMHC2PredSpec |
+    ExposedMotifRestraintSpec | LinearSeqDistRestraintSpec,
     Field(discriminator="key")
 ]
 
 # discriminated union - list all classes implementing "Transformer" interface here
 TransformerSpec = Annotated[
-    EVmutation2Spec | ESM2Spec,
+    EVmutation2Spec | ESM2Spec | Boltz2Spec,
     Field(discriminator="key")
 ]
 
@@ -808,3 +923,29 @@ def condense_spec(spec: InputSpec):
 
     return spec_copy
 
+
+class ModelVariantDefinition(BaseModel):
+    # mapping of constructor param file argument names to
+    # external URL where these files can be retrieved
+    file_args: dict[str, str] | dict[str, list[tuple[str, str]]] | None
+
+    # default parameters to supply to model
+    args: dict[str, Any]
+
+
+class ModelDefinition(BaseModel):
+    # used to conditionally import models only when used
+    # using importlib
+    module_name: str
+    class_name: str
+
+    # defines whether to use GPU/CPU compute
+    gpu_required: bool
+
+    # different model variants of same base model
+    # (e.g. different model sizes); each can have its own
+    # set of default parameters passed to the constructor
+    variants: dict[str, ModelVariantDefinition]
+
+    # custom parameter applied to parameters before applying as model args
+    args_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None

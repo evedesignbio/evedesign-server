@@ -49,35 +49,38 @@ class Tracker:
         worker_name: str | None = None,
         worker_job_id: str | None = None,
     ):
-        # if no connection string specified, do nothing
-        # update results if we have S3 bucket settings in place
+        # if no job ID specified, we cannot update status so return right away
+        if self.job_id is None:
+            return
+
+        # update status if we have a connection string
+        if self.settings.db_connection_string_sync is not None:
+            # with get_sync_session(connection_string=self.connection_string) as session:
+            eng = get_sync_engine(connection_string=self.settings.db_connection_string_sync)
+            with Session(eng) as session:
+                # fail if invalid job ID
+                job = get_job_by_id_sync(self.job_id, session=session)
+                update_job_in_place(
+                    job,
+                    session,
+                    status=status,
+                    spec=results.get("spec") if results is not None else None,
+                    message=message,
+                    worker_name=worker_name,
+                    worker_job_id=worker_job_id
+                )
+
+                # commit all changes
+                session.commit()
+
+        # if no S3 bucket settings specified, return right away as we cannot upload results
         if (
-            self.job_id is None or
-            self.settings.db_connection_string_sync is None or
             self.settings.aws_region_name is None or
             self.settings.aws_access_key_id is None or
             self.settings.aws_secret_access_key is None or
             self.settings.aws_s3_bucket_name is None
         ):
             return
-
-        # with get_sync_session(connection_string=self.connection_string) as session:
-        eng = get_sync_engine(connection_string=self.settings.db_connection_string_sync)
-        with Session(eng) as session:
-            # fail if invalid job ID
-            job = get_job_by_id_sync(self.job_id, session=session)
-            update_job_in_place(
-                job,
-                session,
-                status=status,
-                spec=results.get("spec") if results is not None else None,
-                message=message,
-                worker_name=worker_name,
-                worker_job_id=worker_job_id
-            )
-
-            # commit all changes
-            session.commit()
 
         if results is not None:
             results_json = serialize_results(results)

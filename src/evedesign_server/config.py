@@ -1,7 +1,7 @@
-from typing import Any, Callable
-from pydantic import BaseModel, Field
+from typing import Any
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from evedesign_server.schemas import TemperatureSchedule, InputSpecTypeKeys
+from evedesign_server.schemas import TemperatureSchedule, InputSpecTypeKeys, ModelDefinition
 
 ENV_PREFIX = "designserver_"
 
@@ -19,33 +19,6 @@ EVMUTATION2_DEFAULTS = dict(
 ESM2_DEFAULTS = dict(
     device="cuda"
 )
-
-
-class ModelVariantDefinition(BaseModel):
-    # mapping of constructor param file argument names to
-    # external URL where these files can be retrieved
-    file_args: dict[str, str] | dict[str, list[tuple[str, str]]] | None
-
-    # default parameters to supply to model
-    args: dict[str, Any]
-
-
-class ModelDefinition(BaseModel):
-    # used to conditionally import models only when used
-    # using importlib
-    module_name: str
-    class_name: str
-
-    # defines whether to use GPU/CPU compute
-    gpu_required: bool
-
-    # different model variants of same base model
-    # (e.g. different model sizes); each can have its own
-    # set of default parameters passed to the constructor
-    variants: dict[str, ModelVariantDefinition]
-
-    # custom parameter applied to parameters before applying as model args
-    args_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None
 
 
 def transform_gibbs_args(args: dict[str, Any]) -> dict[str, Any]:
@@ -211,6 +184,74 @@ class Settings(BaseSettings):
                         **ESM2_DEFAULTS,
                         "model_name": "esm2_t33_650M_UR50D"
                     }
+                }
+            },
+        },
+
+        # Boltz-2 model
+        "boltz2": {
+            "module_name": "evedesign.models.boltzfold",
+            "class_name": "BoltzFoldTransformer",
+            "gpu_required": True,
+            "variants": {
+                "default": {
+                    "file_args": {
+                        "model_dir_path": [
+                            (
+                                "mols.tar",
+                                "https://huggingface.co/boltz-community/boltz-2/resolve/main/mols.tar"
+                            ),
+                            (
+                                "boltz2_conf.ckpt",
+                                "https://huggingface.co/boltz-community/boltz-2/resolve/main/boltz2_conf.ckpt"
+                            ),
+                            (
+                                "boltz2_aff.ckpt",
+                                "https://huggingface.co/boltz-community/boltz-2/resolve/main/boltz2_aff.ckpt"
+                            ),
+                        ]
+                    },
+                    "args": {
+                        "batch_size": 64,
+                        "sampling_steps": 200,
+                        "diffusion_samples": 1,
+                        "recycling_steps": 3,
+                        "use_msa": True,
+                        "score_attribute": "confidence_score",
+                        "confidence_attribute":"complex_plddt",
+                        "keep_model_after_build": False,
+                        "device": "cuda",
+                    }
+                }
+            },
+        },
+
+        # MixMHC2pred. Academic use only, binary and PWMdef needs to be installed in environment
+        "mixmhc2pred": {
+            "module_name": "evedesign.models.immunogenicity",
+            "class_name": "MixMHC2Pred",
+            "gpu_required": False,
+            "variants": {
+                "default": {
+                    "file_args": None,
+                    "args": {
+                        "binary": "MixMHC2pred",
+                        "prediction_cache_size": 10 ** 6,
+                        "cpu": None,
+                    }
+                }
+            },
+        },
+
+        # Surface-exposed sequence liabilities
+        "exposed_motif_restraint": {
+            "module_name": "evedesign.restraints.motif",
+            "class_name": "ExposedMotifRestraint",
+            "gpu_required": False,
+            "variants": {
+                "default": {
+                    "file_args": None,
+                    "args": {}
                 }
             },
         },
