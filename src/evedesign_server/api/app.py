@@ -41,7 +41,7 @@ async def submit_job(
     session: DBSessionDep,
     client_ip: ClientIPDep,
 ) -> JobSubmissionResponse:
-    logger.info(f"Job submission from {client_ip} {current_user.sub}")
+    logger.info(f"Job submission from {client_ip} {current_user.id}")
 
     if job_definition.project_id is not None:
         raise HTTPException(
@@ -53,7 +53,7 @@ async def submit_job(
     # note this may be None if no server user entry added to correspond
     # to auth table
     user = await get_server_user_by_id(
-        user_id=current_user.sub, session=session
+        user_id=current_user.id, session=session
     )
 
     if user is None:
@@ -63,7 +63,7 @@ async def submit_job(
 
     # deny submission if not enough credit
     balance = await balance_for_user(
-        current_user.sub, session,
+        current_user.id, session,
     )
 
     # commit any changes to balance right away, start new transaction for submission
@@ -80,7 +80,7 @@ async def submit_job(
     # check parent job permissions
     if job_definition.parent_job_id is not None:
         parent = await get_job_by_id(
-            job_definition.parent_job_id, current_user_id=current_user.sub, session=session
+            job_definition.parent_job_id, current_user_id=current_user.id, session=session
         )
         if parent is None:
             raise HTTPException(status_code=422, detail="Invalid parent job")
@@ -94,7 +94,7 @@ async def submit_job(
             public=job_definition.public,
             parent_job_id=job_definition.parent_job_id,
             ip_address=client_ip,
-            user_id=current_user.sub,
+            user_id=current_user.id,
             session=session,
         )
 
@@ -132,7 +132,7 @@ async def submit_job(
             status_code=422, detail="Inconsistent references in job definition"
         )
     except Exception:
-        logger.exception(f"Job submission failure for user {current_user.sub}")
+        logger.exception(f"Job submission failure for user {current_user.id}")
         raise HTTPException(
             status_code=500, detail="Error processing submission request"
         )
@@ -143,11 +143,11 @@ async def list_jobs(
     session: DBSessionDep,
 ) -> JobListResponse:
     # return empty job list for public account etc. if specified - UUIDs must be specified as lowercase strings
-    if s.hidden_result_list_user_ids is not None and str(current_user.sub) in s.hidden_result_list_user_ids:
+    if s.hidden_result_list_user_ids is not None and str(current_user.id) in s.hidden_result_list_user_ids:
         jobs = []
     else:
         jobs = await list_jobs_for_user(
-            current_user_id=current_user.sub, session=session
+            current_user_id=current_user.id, session=session
         )
 
     return JobListResponse(
@@ -163,7 +163,7 @@ async def get_job_results(
     session: DBSessionDep,
 ) -> JobResultResponse | Any:
     job = await get_job_by_id(
-        job_id, current_user_id=current_user.sub, session=session
+        job_id, current_user_id=current_user.id, session=session
     )
     if job is None:
         raise HTTPException(
@@ -218,7 +218,7 @@ async def get_balance(
     session: DBSessionDep,
 ) -> BalanceResponse:
     balance = await balance_for_user(
-        current_user.sub, session
+        current_user.id, session
     )
     # commit updated balance
     await session.commit()
@@ -238,5 +238,5 @@ async def index(
     current_user: CurrentUserDep,
 ):
     return {
-        "user": current_user.sub,
+        "user": current_user.id,
     }
