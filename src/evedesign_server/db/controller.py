@@ -37,7 +37,6 @@ async def create_job(
 
     # note: for now we set parent jobs without checking access privilege;
     # user will need to have access to derive a job from existing jobs anyways
-    # TODO: add permission check on parent project once permission model is done
     job = ComputeJob(
         id=uuid4(),  # manually create job ID so it is available right away
         name=name,

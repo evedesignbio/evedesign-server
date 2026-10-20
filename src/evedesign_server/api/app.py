@@ -1,10 +1,10 @@
+from contextlib import AsyncExitStack
 from io import BytesIO
-from traceback import format_exc
-from typing import Any
+from typing import Any, Annotated
 from uuid import UUID
 import aioboto3
 from loguru import logger
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import IntegrityError
@@ -28,14 +28,25 @@ web_app.add_middleware(
     allow_headers=["Authorization"],
 )
 
+def get_client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+ClientIPDep = Annotated[str | None, Depends(get_client_ip)]
+
+
 @web_app.post("/job")
 async def submit_job(
     job_definition: JobSubmissionPayload,
     current_user: CurrentUserDep,
     session: DBSessionDep,
-    client_ip: str = Header(None, alias="X-Forwarded-For")
+    client_ip: ClientIPDep,
 ) -> JobSubmissionResponse:
-    logger.info(client_ip)
+    logger.info(f"Job submission from {client_ip} {current_user.sub}")
+
+    if job_definition.project_id is not None:
+        raise HTTPException(
+            status_code=422, detail="Project ID cannot be set at this time"
+        )
 
     # check available user credits here or halt job submission
     # with "insufficient credits" error;
@@ -47,7 +58,7 @@ async def submit_job(
 
     if user is None:
         raise HTTPException(
-            status_code=401, detail="User not activated for job submission"
+            status_code=403, detail="User not activated for job submission"
         )
 
     # deny submission if not enough credit
@@ -59,17 +70,27 @@ async def submit_job(
     if session.dirty:
         await session.commit()
 
+    # note this is only a very rudimentary check for now, concurrent submissions
+    # or longer-running jobs may move balance to smaller than 0 for now
     if balance is None or balance <= 0:
         raise HTTPException(
-            status_code=401, detail="Insufficient compute credit"
+            status_code=403, detail="Insufficient compute credit"
         )
+
+    # check parent job permissions
+    if job_definition.parent_job_id is not None:
+        parent = await get_job_by_id(
+            job_definition.parent_job_id, current_user_id=current_user.sub, session=session
+        )
+        if parent is None:
+            raise HTTPException(status_code=422, detail="Invalid parent job")
 
     try:
         # initialize compute job
         job = await create_job(
             name=job_definition.name,
             spec=job_definition.spec,
-            project_id=job_definition.project_id,
+            project_id=None,  # note create_job() only accepts None for now
             public=job_definition.public,
             parent_job_id=job_definition.parent_job_id,
             ip_address=client_ip,
@@ -87,6 +108,7 @@ async def submit_job(
         # upload input spec to s3
         spec_dumped = job_definition.spec.model_dump_json().encode()
         aws_session = aioboto3.Session()
+        # TODO: could move client creation to lifespan to avoid re-creation
         async with aws_session.client(
             "s3",
             region_name=s.aws_region_name,
@@ -104,13 +126,13 @@ async def submit_job(
             job_id=job.id
         )
     except IntegrityError:
-        logger.error(format_exc())
+        logger.exception("Job submission violates database integrity")
         # will be raised e.g. for invalid parent project id
         raise HTTPException(
             status_code=422, detail="Inconsistent references in job definition"
         )
     except Exception:
-        logger.error(format_exc())
+        logger.exception(f"Job submission failure for user {current_user.sub}")
         raise HTTPException(
             status_code=500, detail="Error processing submission request"
         )
@@ -119,11 +141,8 @@ async def submit_job(
 async def list_jobs(
     current_user: CurrentUserDep,
     session: DBSessionDep,
-    client_ip: str = Header(None, alias="X-Forwarded-For")
 ) -> JobListResponse:
-    logger.info(client_ip)
-
-    # return empty job list for public account etc. if specified
+    # return empty job list for public account etc. if specified - UUIDs must be specified as lowercase strings
     if s.hidden_result_list_user_ids is not None and str(current_user.sub) in s.hidden_result_list_user_ids:
         jobs = []
     else:
@@ -133,9 +152,7 @@ async def list_jobs(
 
     return JobListResponse(
         jobs=[
-            JobSummary(
-                **job.__dict__
-            ) for job in jobs
+            JobSummary.model_validate(job) for job in jobs
         ]
     )
 
@@ -144,49 +161,43 @@ async def get_job_results(
     job_id: UUID,
     current_user: CurrentUserDep,
     session: DBSessionDep,
-    client_ip: str = Header(None, alias="X-Forwarded-For")
 ) -> JobResultResponse | Any:
-    logger.info(client_ip)
-
     job = await get_job_by_id(
         job_id, current_user_id=current_user.sub, session=session
     )
     if job is None:
         raise HTTPException(
-            status_code=400, detail="Invalid job or missing permissions"
+            status_code=404, detail="Invalid job or missing permissions"
         )
 
-    summary_response = JobResultResponse(
-        **job.__dict__
-    )
+    summary_response = JobResultResponse.model_validate(job)
 
     if job.status != "finished":
         return summary_response
 
+    stack = AsyncExitStack()  # noqa
     try:
-        # https://stackoverflow.com/questions/69617252/response-file-stream-from-s3-fastapi
-        aws_session = aioboto3.Session()
-        async def s3_stream():
-            async with aws_session.client(
-               "s3",
-                region_name=s.aws_region_name,
-                aws_access_key_id=s.aws_access_key_id,
-                aws_secret_access_key=s.aws_secret_access_key,
-            ) as client:
-                result = await client.get_object(
-                    Bucket=s.aws_s3_bucket_name, Key=result_path_for_job_id(job_id)
-                )
-                # inject other fields into stream response
-                yield (summary_response.model_dump_json()[:-1] + ', "results": ').encode()
-                async for chunk in result["Body"]:
-                    yield chunk
-                yield '}'.encode()
+        # TODO: could move client creation to lifespan to avoid re-creation
+        client = await stack.enter_async_context(aioboto3.Session().client(
+            "s3", region_name=s.aws_region_name,
+            aws_access_key_id=s.aws_access_key_id, aws_secret_access_key=s.aws_secret_access_key,
+        ))
+        result = await client.get_object(Bucket=s.aws_s3_bucket_name, Key=result_path_for_job_id(job_id))
+    except Exception as exc:
+        await stack.aclose()
+        logger.exception(f"Fetching results for job {job_id} failed")
+        raise HTTPException(status_code=500, detail="Error returning job results") from exc
 
-        return StreamingResponse(s3_stream())
-    except Exception:
-        raise HTTPException(
-            status_code=500, detail="Error returning job results"
-        )
+    async def s3_stream():
+        try:
+            yield (summary_response.model_dump_json()[:-1] + ', "results": ').encode()
+            async for chunk in result["Body"].iter_chunks(64 * 1024):
+                yield chunk
+            yield b"}"
+        finally:
+            await stack.aclose()
+
+    return StreamingResponse(s3_stream(), media_type="application/json")
 
 # # alternative with regular boto3:
 # # define outside function
@@ -205,15 +216,15 @@ async def get_job_results(
 async def get_balance(
     current_user: CurrentUserDep,
     session: DBSessionDep,
-    client_ip: str = Header(None, alias="X-Forwarded-For")
 ) -> BalanceResponse:
-    logger.info(client_ip)
-
     balance = await balance_for_user(
         current_user.sub, session
     )
     # commit updated balance
     await session.commit()
+
+    if balance is None:
+        balance = 0
 
     # return balance as available compute time in minutes rather than raw budget
     balance = balance / (s.compute_cost_per_second["pipeline"] * 60)
@@ -225,11 +236,7 @@ async def get_balance(
 @web_app.get("/")
 async def index(
     current_user: CurrentUserDep,
-    session: DBSessionDep,  # noqa
-    client_ip: str = Header(None, alias="X-Forwarded-For")
 ):
-    logger.info(client_ip)
-
     return {
         "user": current_user.sub,
     }

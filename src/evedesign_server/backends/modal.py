@@ -160,15 +160,17 @@ def execute_pipeline_cpu(
     region="us-east-1",  # run in same region as supabase DB
 )
 @modal.concurrent(max_inputs=1000)
-# @modal.asgi_app(requires_proxy_auth=False)
-@modal.web_server(8000, startup_timeout=60)
+@modal.asgi_app()
+# @modal.web_server(8000, startup_timeout=60)
 def api():
-    # from evedesign_server.api.app import web_app
-    # return web_app
-    subprocess.Popen(
-        'uvicorn evedesign_server.api.app:web_app --host 0.0.0.0 --port 8000 --log-level=info --proxy-headers --forwarded-allow-ips=*',
-        shell=True
-    )
+    from evedesign_server.api.app import web_app
+    return web_app
+
+    # Note: --forwarded-allow-ips=* is discouraged as it allows to spoof headers
+    # subprocess.Popen(
+    #     'uvicorn evedesign_server.api.app:web_app --host 0.0.0.0 --port 8000 --log-level=info --proxy-headers --forwarded-allow-ips=*',
+    #     shell=True
+    # )
 
 @app.function(
     image=api_image,
