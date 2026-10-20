@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 from uuid import UUID
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from evedesign_server.db.models import JobStatus
 from evedesign_server.schemas import InputSpec, InputSpecTypeKeys
 
@@ -18,6 +18,8 @@ class JobSubmissionResponse(BaseModel):
     job_id: UUID
 
 class JobSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     name: str | None
     status: JobStatus
@@ -35,6 +37,8 @@ class JobListResponse(BaseModel):
     jobs: list[JobSummary]
 
 class JobResultResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     type: InputSpecTypeKeys
     status: JobStatus
     name: str | None
