@@ -1,6 +1,7 @@
 from io import BytesIO
 import json
 import signal
+import math
 from typing import Any
 from uuid import UUID
 import boto3
@@ -10,14 +11,47 @@ from evedesign_server.db.engine import get_sync_engine
 from evedesign_server.db.models import JobStatus
 from evedesign_server.config import Settings
 
-def serialize_results(results: dict[str, Any]):
-    return {
+
+def _to_json_safe(obj: Any) -> Any:
+    """
+    Recursively convert to JSON-safe types:
+    * array-likes -> native
+    * NaN/inf -> None
+    """
+    if isinstance(obj, dict):
+        return {_to_json_safe_key(k): _to_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_to_json_safe(v) for v in obj]
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if callable(getattr(obj, "tolist", None)):  # NumPy arrays/scalars, and similar
+        converted = obj.tolist()
+        if type(converted) is type(obj):  # e.g. np.longdouble.tolist() returns itself
+            converted = float(obj)
+        return _to_json_safe(converted)
+    return obj
+
+
+def _to_json_safe_key(key: Any) -> Any:
+    """
+    Convert NumPy and float keys, leave other keys for json.dump to validate
+    """
+    if isinstance(key, float) or callable(getattr(key, "tolist", None)):
+        return _to_json_safe(key)
+
+    return key
+
+
+def serialize_results(results: dict[str, Any]) -> dict[str, Any]:
+    return _to_json_safe({
         k: (
             [e.model_dump() for e in v]
             if isinstance(v, list)
             else v.model_dump()
-        ) for k, v in results.items()
-    }
+        )
+        for k, v in results.items()
+    })
+
 
 class Tracker:
     """
