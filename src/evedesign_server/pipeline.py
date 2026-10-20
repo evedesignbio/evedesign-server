@@ -587,6 +587,11 @@ def filter_a3m(
                     f"filter the alignment of entity '{entity.id}'; install hhsuite "
                     f"or pass hhfilter_path."
                 ) from e
+            except OSError as e:
+                raise RuntimeError(
+                    f"Could not run hhfilter at '{hhfilter_path}' for entity "
+                    f"'{entity.id}': {e}"
+                ) from e
 
             if result.returncode != 0:
                 raise RuntimeError(
