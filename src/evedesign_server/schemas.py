@@ -129,7 +129,7 @@ class ClassSpecBase(BaseModel):
         # verify so user cannot inject a relative or absolute path
         if self.source_id is not None and path.split(self.source_id)[-1] != self.source_id:
             raise ValueError(
-                "Invalid from_id specification"
+                "Invalid source_id specification"
             )
 
         # verify so user cannot inject a relative or absolute path
