@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # job database access settings
     db_connection_string: str | None = None
 
+    # authenticate against AWS RDS/Aurora with IAM tokens instead of a password
+    # (connection string must then contain host and user, but no password)
+    db_iam_auth: bool = False
+
     @property
     def db_connection_string_sync(self) -> str | None:
         if self.db_connection_string is not None:
