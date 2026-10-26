@@ -53,8 +53,7 @@ DESIGNSERVER_SUPABASE_ANON_KEY=
 
 Run the following command once to prepare all required database tables (requires `DESIGNSERVER_DB_CONNECTION_STRING`to be set, cf. above):
 ```console
-from evedesign_server.db.engine import create_all
-create_all()
+python -m evedesign_server.db.cli create-all
 ```
 
 ### Model files
