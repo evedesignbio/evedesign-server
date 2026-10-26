@@ -65,8 +65,11 @@ FROM base
 WORKDIR /api
 COPY . .
 COPY --from=wheel_builder /wheels /wheels
+ARG EVEDESIGN_REPO=https://github.com/evedesignbio/evedesign.git
+ARG EVEDESIGN_REF=develop
+ARG EVEDESIGN_EXTRAS=evmutation2,esm2,mpnn,umap
 RUN pip install --no-cache-dir --find-links=/wheels \
-        "evedesign[evmutation2,esm2,mpnn,umap] @ git+https://github.com/evedesignbio/evedesign.git@develop" \
+        "evedesign[${EVEDESIGN_EXTRAS}] @ git+${EVEDESIGN_REPO}@${EVEDESIGN_REF}" \
         ".[api,pipeline]" && \
     rm -rf "$HOME/.cache"
 
