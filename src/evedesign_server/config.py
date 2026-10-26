@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from evedesign_server.schemas import TemperatureSchedule, InputSpecTypeKeys, ModelDefinition
@@ -71,6 +71,13 @@ class Settings(BaseSettings):
             )
         else:
             return None
+
+    # auth settings
+    auth_provider: Literal["supabase", "entra"] | None = None
+    auth_jwks_url: str | None = None
+    auth_issuer: str | None = None
+    auth_audience: str | None = None
+    auth_algorithm: str | None = None
 
     # S3 bucket access settings for storing result files
     aws_region_name: str | None = None

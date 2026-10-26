@@ -1,93 +1,81 @@
-# parts of implementation following https://github.com/AtticusZeller/fastapi_supabase_template/blob/main/backend/app/core/auth.py
-"""
-MIT License
-
-Copyright (c) 2024 Atticus Zeller
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-"""
+from functools import lru_cache
 from typing import Annotated
-import os
 from uuid import UUID
-from fastapi import Depends, HTTPException # status
-from fastapi.security import OAuth2PasswordBearer
-from supabase import AsyncClient, AsyncClientOptions, acreate_client
-from supabase_auth.errors import AuthInvalidJwtError
-from pydantic import BaseModel
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2AuthorizationCodeBearer
+import jwt
+from jwt import PyJWKClient
+from pydantic import BaseModel, ValidationError
+from loguru import logger
 
-auth_scheme = OAuth2PasswordBearer(tokenUrl="token")
+from evedesign_server.config import Settings
 
-SUPABASE_URL_ENV_VAR = "DESIGNSERVER_SUPABASE_URL"
-SUPABASE_ANON_KEY_ENV_VAR = "DESIGNSERVER_SUPABASE_ANON_KEY"
+s = Settings()
 
-async def get_supabase_client() -> AsyncClient:
-    """for validation access_token init at life span event"""
-    supabase_client = await acreate_client(
-        os.environ.get(SUPABASE_URL_ENV_VAR),
-        os.environ.get(SUPABASE_ANON_KEY_ENV_VAR),
-        options=AsyncClientOptions(
-            postgrest_client_timeout=10, storage_client_timeout=10
-        ),
-    )
-    if not supabase_client:
-        raise HTTPException(
-            status_code=500, detail="Super client not initialized"
-        )
-
-    return supabase_client
-
-SupabaseClient = Annotated[AsyncClient, Depends(get_supabase_client)]
+auth_scheme = OAuth2AuthorizationCodeBearer(tokenUrl="token", authorizationUrl="authorization")
 TokenDep = Annotated[str, Depends(auth_scheme)]
 
+@lru_cache
+def get_jwks_client() -> PyJWKClient:
+    if s.auth_jwks_url is None:
+        raise ValueError("No JWKS URL configured")
+
+    return PyJWKClient(
+        s.auth_jwks_url, cache_jwk_set=True, lifespan=300, timeout=5
+    )
+
+JWKSClientDep = Annotated[PyJWKClient, Depends(get_jwks_client)]
+
+unauthorized_exception = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="Could not validate credentials",
+    headers={"WWW-Authenticate": "Bearer"},
+)
 
 class UserIn(BaseModel):
-    sub: UUID
+    id: UUID
     access_token: str
 
 
-async def get_current_user(token: TokenDep, super_client: SupabaseClient) -> UserIn:
-    """get current user from token and  validate same time"""
+def get_current_user(token: TokenDep, jwks_client: JWKSClientDep) -> UserIn:
+    """Validate token (sync function is run in threadpool by FastAPI automatically)"""
+    if s.auth_provider is None or s.auth_algorithm is None or s.auth_audience is None or s.auth_issuer is None:
+        raise ValueError("Invalid configuration")
+
     try:
-        resp = await super_client.auth.get_claims(jwt=token)
-    except AuthInvalidJwtError:
-        raise HTTPException(
-            status_code=401, detail="Invalid credentials"
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+        claims = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=[s.auth_algorithm],
+            audience=s.auth_audience,
+            issuer=s.auth_issuer,
+            options={"require": ["exp", "iat", "iss", "aud", "sub"]},
+            leeway=30
         )
 
-    if not resp:
-        raise HTTPException(
-            status_code=404, detail="User not found"
-        )
+        if s.auth_provider == "entra":
+            # sub is per app in Entra, use oid for global user ID in tenant (multi-tenant would also need tid)
+            if "scp" not in claims:
+                raise jwt.InvalidTokenError("Not a delegated user token")
+            user_id = claims["oid"]
+        else:
+            # for now only generically cover supabase
+            if claims.get("is_anonymous"):
+                raise jwt.InvalidTokenError("Anonymous users are not allowed")
 
-    claims = resp["claims"]
-    if not claims.get(
-        "user_metadata", {"email_verified": False}
-    ).get(
-        "email_verified"
-    ):
-        raise HTTPException(
-            status_code=401, detail="Account not activated"
-        )
+            # if this is not a UUID, need to further update
+            user_id = claims["sub"]
 
-    return UserIn(
-        sub=claims["sub"],
-        access_token=token
-    )
+        return UserIn(id=user_id, access_token=token)
+    except jwt.PyJWKClientConnectionError as exc:
+        logger.warning("Auth provider unreachable at {}: {}", s.auth_jwks_url, exc)
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Auth provider unavailable") from exc
+    except jwt.ExpiredSignatureError as exc:
+        logger.debug("Token rejected: expired")
+        raise unauthorized_exception from exc
+    except (jwt.PyJWTError, ValidationError, KeyError) as exc:
+        logger.info("Token rejected: {}: {}", type(exc).__name__, exc)
+        raise unauthorized_exception from exc
 
 CurrentUserDep = Annotated[UserIn, Depends(get_current_user)]

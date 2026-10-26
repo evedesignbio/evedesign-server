@@ -26,7 +26,7 @@ dependencies = ["pydantic", "pydantic-settings", "loguru"]
 
 [project.optional-dependencies]
 api = [
-  "fastapi[standard]", "uvicorn[standard]", "cryptography", "pyjwt", "supabase",
+  "fastapi[standard]", "uvicorn[standard]", "cryptography", "pyjwt[crypto]", "supabase",
   "sqlalchemy[asyncio]", "asyncpg", "psycopg[binary,pool]", "boto3", "aioboto3",
   "click",
 ]
