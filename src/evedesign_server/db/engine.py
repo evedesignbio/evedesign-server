@@ -15,13 +15,19 @@ def get_sync_engine(connection_string: str | None = None):
     """
     Connect to database using SQLAlchemy
     """
-    database_url = connection_string or Settings().db_connection_string_sync
+    s = Settings()
+    database_url = connection_string or s.db_connection_string_sync
     if database_url is None:
         raise ValueError(
             f"Must specify database connection string in settings"
         )
 
-    return create_engine(database_url)
+    engine = create_engine(database_url)
+    if s.db_iam_auth:
+        from evedesign_server.db.iam import attach_rds_iam_auth
+        attach_rds_iam_auth(engine, region=s.aws_region_name)
+
+    return engine
 
 # @contextmanager
 # def get_sync_session(connection_string: str | None = None):

@@ -107,13 +107,10 @@ class Tracker:
                 # commit all changes
                 session.commit()
 
-        # if no S3 bucket settings specified, return right away as we cannot upload results
-        if (
-            self.settings.aws_region_name is None or
-            self.settings.aws_access_key_id is None or
-            self.settings.aws_secret_access_key is None or
-            self.settings.aws_s3_bucket_name is None
-        ):
+        # if no S3 bucket specified, return right away as we cannot upload results. We do not enforce
+        # aws_region_name, aws_access_key_id and aws_secret_access_key here to allow these settings
+        # to be picked up by boto3 from defaults or use role-based auth instead
+        if self.settings.aws_s3_bucket_name is None:
             return
 
         if results is not None:

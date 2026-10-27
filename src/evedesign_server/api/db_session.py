@@ -35,10 +35,16 @@ from evedesign_server.config import Settings
 
 # Heavily inspired by https://praciano.com.br/fastapi-and-async-sqlalchemy-20-with-pytest-done-right.html
 class DatabaseSessionManager:
-    def __init__(self, host: str, engine_kwargs: dict[str, Any] | None = None):
+    def __init__(
+        self, host: str, engine_kwargs: dict[str, Any] | None = None,
+        iam_auth: bool = False, aws_region: str | None = None,
+    ):
         if engine_kwargs is None:
             engine_kwargs = {}
         self._engine = create_async_engine(host, **engine_kwargs)
+        if iam_auth:
+            from evedesign_server.db.iam import attach_rds_iam_auth
+            attach_rds_iam_auth(self._engine, region=aws_region)
         self._sessionmaker = async_sessionmaker(autocommit=False, bind=self._engine, expire_on_commit=False)
 
     async def close(self):
@@ -75,8 +81,11 @@ class DatabaseSessionManager:
         finally:
             await session.close()
 
+s = Settings()
 sessionmanager = DatabaseSessionManager(
-    Settings().db_connection_string_async
+    s.db_connection_string_async,
+    iam_auth=s.db_iam_auth,
+    aws_region=s.aws_region_name,
 )
 
 @contextlib.asynccontextmanager

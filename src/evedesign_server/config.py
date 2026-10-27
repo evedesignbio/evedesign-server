@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from evedesign_server.schemas import TemperatureSchedule, InputSpecTypeKeys, ModelDefinition
@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # job database access settings
     db_connection_string: str | None = None
 
+    # authenticate against AWS RDS/Aurora with IAM tokens instead of a password
+    # (connection string must then contain host and user, but no password)
+    db_iam_auth: bool = False
+
     @property
     def db_connection_string_sync(self) -> str | None:
         if self.db_connection_string is not None:
@@ -68,11 +72,21 @@ class Settings(BaseSettings):
         else:
             return None
 
+    # auth settings
+    auth_provider: Literal["supabase", "entra", "oidc"] | None = None
+    auth_jwks_url: str | None = None
+    auth_issuer: str | None = None
+    auth_audience: str | None = None
+    auth_algorithm: str | None = None
+
     # S3 bucket access settings for storing result files
     aws_region_name: str | None = None
     aws_s3_bucket_name: str | None = None
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
+
+    # plugin entrypoint for custom job dispatcher behaviour (import string module:Class)
+    job_dispatcher: str | None = None
 
     # name of worker executing job
     worker_name : str | None = None

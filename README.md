@@ -44,17 +44,18 @@ DESIGNSERVER_AWS_SECRET_ACCESS_KEY=
 DESIGNSERVER_AWS_REGION_NAME=
 DESIGNSERVER_AWS_S3_BUCKET_NAME=
 
-# supabase URL/public key for user authentication
-DESIGNSERVER_SUPABASE_URL=
-DESIGNSERVER_SUPABASE_ANON_KEY=
-
+# authentication settings for token verification
+export DESIGNSERVER_AUTH_PROVIDER=supabase | entra
+export DESIGNSERVER_AUTH_JWKS_URL=
+export DESIGNSERVER_AUTH_ISSUER=
+export DESIGNSERVER_AUTH_AUDIENCE=
+export DESIGNSERVER_AUTH_ALGORITHM=
 ```
 ### Database setup
 
 Run the following command once to prepare all required database tables (requires `DESIGNSERVER_DB_CONNECTION_STRING`to be set, cf. above):
 ```console
-from designserver_api.db.engine import create_all
-create_all()
+python -m evedesign_server.db.cli create-all
 ```
 
 ### Model files
