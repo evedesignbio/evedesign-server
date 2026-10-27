@@ -12,8 +12,9 @@ from evedesign_server.api.api_schemas import JobSubmissionPayload, JobSubmission
     JobListResponse, JobSummary, BalanceResponse
 from evedesign_server.api.auth import CurrentUserDep
 from evedesign_server.api.db_session import DBSessionDep, lifespan
+from evedesign_server.api.dispatch import JobDispatcher, get_dispatcher
 from evedesign_server.db.controller import (
-    create_job, add_to_queue, get_job_by_id, get_server_user_by_id, list_jobs_for_user, spec_path_for_job_id,
+    create_job, get_job_by_id, get_server_user_by_id, list_jobs_for_user, spec_path_for_job_id,
     result_path_for_job_id, balance_for_user
 )
 from evedesign_server.config import Settings
@@ -34,12 +35,40 @@ def get_client_ip(request: Request) -> str | None:
 ClientIPDep = Annotated[str | None, Depends(get_client_ip)]
 
 
+def s3_client():
+    # TODO: could move client creation to lifespan to avoid re-creation
+    return aioboto3.Session().client(
+        "s3",
+        region_name=s.aws_region_name,
+        aws_access_key_id=s.aws_access_key_id,
+        aws_secret_access_key=s.aws_secret_access_key,
+    )
+
+
+async def delete_s3_object_safe(key: str) -> None:
+    """
+    Best-effort removal of an S3 object, e.g. a spec uploaded for a submission that
+    was subsequently aborted. Failures are logged but never raised so the
+    original error is not masked.
+    """
+    try:
+        async with s3_client() as client:
+            await client.delete_object(Bucket=s.aws_s3_bucket_name, Key=key)
+        logger.info(f"Removed orphaned S3 object {key}")
+    except Exception:
+        logger.exception(f"Failed to remove orphaned S3 object {key}")
+
+# job dispatcher selected via DESIGNSERVER_JOB_DISPATCHER (defaults to evedesign job queue);
+# can also be replaced via web_app.dependency_overrides[get_dispatcher]
+DispatcherDep = Annotated[JobDispatcher, Depends(get_dispatcher)]
+
 @web_app.post("/job")
 async def submit_job(
     job_definition: JobSubmissionPayload,
     current_user: CurrentUserDep,
     session: DBSessionDep,
     client_ip: ClientIPDep,
+    dispatcher: DispatcherDep,
 ) -> JobSubmissionResponse:
     logger.info(f"Job submission from {client_ip} {current_user.id}")
 
@@ -98,33 +127,36 @@ async def submit_job(
             session=session,
         )
 
-        # add to job queue
-        await add_to_queue(
-            job=job,
-            priority= user.job_priority,
-            session=session
-        )
-
-        # upload input spec to s3
+        # upload input spec to s3 first so any dispatcher sees a complete job
         spec_dumped = job_definition.spec.model_dump_json().encode()
-        aws_session = aioboto3.Session()
-        # TODO: could move client creation to lifespan to avoid re-creation
-        async with aws_session.client(
-            "s3",
-            region_name=s.aws_region_name,
-            aws_access_key_id=s.aws_access_key_id,
-            aws_secret_access_key=s.aws_secret_access_key,
-        ) as client:
+        spec_key = spec_path_for_job_id(job.id)
+        async with s3_client() as client:
             await client.upload_fileobj(
                 BytesIO(spec_dumped),
                 s.aws_s3_bucket_name,
-                spec_path_for_job_id(job.id)
+                spec_key,
             )
 
-        await session.commit()
+        try:
+            # hand job to dispatcher within submission transaction
+            # (default: add to evedesign job queue)
+            await dispatcher.dispatch(job, spec_dumped, user, session)
+            await session.commit()
+        except BaseException:
+            # job was never persisted, so the uploaded spec has no owner; remove it
+            # (BaseException so that cancelled requests are cleaned up as well)
+            await delete_s3_object_safe(spec_key)
+            raise
+
+        # notify external systems only once job is persisted
+        await dispatcher.after_commit(job, spec_dumped, user)
+
         return JobSubmissionResponse(
             job_id=job.id
         )
+    except HTTPException:
+        # allow dispatchers to reject submissions with their own status/message
+        raise
     except IntegrityError:
         logger.exception("Job submission violates database integrity")
         # will be raised e.g. for invalid parent project id
@@ -177,11 +209,7 @@ async def get_job_results(
 
     stack = AsyncExitStack()  # noqa
     try:
-        # TODO: could move client creation to lifespan to avoid re-creation
-        client = await stack.enter_async_context(aioboto3.Session().client(
-            "s3", region_name=s.aws_region_name,
-            aws_access_key_id=s.aws_access_key_id, aws_secret_access_key=s.aws_secret_access_key,
-        ))
+        client = await stack.enter_async_context(s3_client())
         result = await client.get_object(Bucket=s.aws_s3_bucket_name, Key=result_path_for_job_id(job_id))
     except Exception as exc:
         await stack.aclose()

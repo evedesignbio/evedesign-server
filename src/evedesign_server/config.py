@@ -73,7 +73,7 @@ class Settings(BaseSettings):
             return None
 
     # auth settings
-    auth_provider: Literal["supabase", "entra"] | None = None
+    auth_provider: Literal["supabase", "entra", "oidc"] | None = None
     auth_jwks_url: str | None = None
     auth_issuer: str | None = None
     auth_audience: str | None = None
@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     aws_s3_bucket_name: str | None = None
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
+
+    # plugin entrypoint for custom job dispatcher behaviour (import string module:Class)
+    job_dispatcher: str | None = None
 
     # name of worker executing job
     worker_name : str | None = None
